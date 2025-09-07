@@ -16,4 +16,3 @@ def save_two_cycles(n: int, m: int, a:str, b: str, out_path: str) -> None:
     G = cd.labeled_two_cycles_graph(n, m, labels=(a, b))
     from networkx.drawing.nx_pydot import write_dot
     write_dot(G, out_path)
-
