@@ -13,6 +13,7 @@ def test_graph_stats_bzip_truth():
     assert labels == {"a", "d"}
     assert isinstance(labels, set) and all(isinstance(s, str) for s in labels)
 
+
 pydot = pytest.importorskip("pydot")
 
 
