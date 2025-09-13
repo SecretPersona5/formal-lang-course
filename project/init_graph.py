@@ -8,6 +8,14 @@ from networkx.drawing.nx_pydot import write_dot
 from pyformlang.finite_automaton import NondeterministicFiniteAutomaton, State, Symbol
 
 
+__all__ = [
+    "graph_stats",
+    "save_two_cycles",
+    "graph_to_nfa",
+    "save_nfa_dot",
+]
+
+
 def graph_stats(name: str) -> Tuple[int, int, set[str]]:
     path = cd.download(name)
     G = cd.graph_from_csv(path)

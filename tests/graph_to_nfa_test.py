@@ -5,8 +5,6 @@ import networkx as nx
 
 from project.init_graph import graph_to_nfa
 
-pytest.importorskip("pyformlang")
-
 
 def test_graph_to_nfa_defaults_all_states_are_start_and_final():
     G = nx.MultiDiGraph()
