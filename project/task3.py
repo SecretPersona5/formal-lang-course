@@ -1,229 +1,167 @@
 # Task 3
 
-from dataclasses import dataclass
-from typing import Dict, Iterable, Set, Hashable, List, Tuple
-
+from typing import Dict, Iterable, Set, Hashable, List, Tuple, Union
 import numpy as np
-import networkx as nx
-from scipy.sparse import dok_matrix, csr_matrix, spmatrix, kron
-
+from scipy.sparse import dok_matrix, csr_matrix, csc_matrix, kron
 from pyformlang.finite_automaton import (
-    DeterministicFiniteAutomaton,
-    NondeterministicFiniteAutomaton,
-    Symbol,
+    NondeterministicFiniteAutomaton as NFA,
+    DeterministicFiniteAutomaton as DFA,
     State,
+    Symbol,
 )
-
+from networkx import MultiDiGraph
 from project.init_graph import graph_to_nfa
 from project.task2 import regex_to_dfa
 
 
-@dataclass
+def _sym_key(s: Hashable) -> Hashable:
+    return s.value if isinstance(s, Symbol) else s
+
+
 class AdjacencyMatrixFA:
-    states: List[Hashable]
-    alphabet: Set[Hashable]
-    start_states: Set[int]
-    final_states: Set[int]
-    matrices: Dict[Hashable, csr_matrix]
-
-    @classmethod
-    def from_dfa(cls, dfa: DeterministicFiniteAutomaton) -> "AdjacencyMatrixFA":
-        return cls._from_fa_core(dfa)
-
-    @classmethod
-    def from_nfa(cls, nfa: NondeterministicFiniteAutomaton) -> "AdjacencyMatrixFA":
-        return cls._from_fa_core(nfa)
-
-    @classmethod
-    def _from_fa_core(cls, fa) -> "AdjacencyMatrixFA":
-        states = [s.value if isinstance(s, State) else s for s in fa.states]
-        index = {s: i for i, s in enumerate(states)}
+    def __init__(self, automaton: Union[NFA, DFA]):
+        states = list(automaton.states)
+        self.states: List[Hashable] = states
+        idx: Dict[Hashable, int] = {s: i for i, s in enumerate(states)}
         n = len(states)
-
-        alphabet: Set[Hashable] = set()
-        for s_from, sym in fa.to_dict().keys():
-            a = sym.value if isinstance(sym, Symbol) else sym
-            alphabet.add(a)
-
+        self.alphabet: Set[Hashable] = {
+            _sym_key(a) for a in getattr(automaton, "symbols", set())
+        }
         mats: Dict[Hashable, dok_matrix] = {
-            a: dok_matrix((n, n), dtype=bool) for a in alphabet
+            a: dok_matrix((n, n), dtype=bool) for a in self.alphabet
         }
-
-        for (s_from, sym), tos in fa.to_dict().items():
-            a = sym.value if isinstance(sym, Symbol) else sym
-            i = index[s_from.value if isinstance(s_from, State) else s_from]
-            for s_to in tos:
-                j = index[s_to.value if isinstance(s_to, State) else s_to]
-                mats[a][i, j] = True
-
-        start_states = {
-            index[s.value if isinstance(s, State) else s] for s in fa.start_states
+        for u, trans in automaton.to_dict().items():
+            for sym, vs in trans.items():
+                if sym is None:
+                    continue
+                a = _sym_key(sym)
+                targets = vs if isinstance(vs, (set, list, tuple)) else [vs]
+                for v in targets:
+                    mats.setdefault(a, dok_matrix((n, n), dtype=bool))
+                    mats[a][idx[u], idx[v]] = True
+        self.matrices: Dict[Hashable, csc_matrix] = {
+            a: M.tocsc() for a, M in mats.items()
         }
-        final_states = {
-            index[s.value if isinstance(s, State) else s] for s in fa.final_states
-        }
+        self.start_states: Set[int] = {idx[s] for s in automaton.start_states}
+        self.final_states: Set[int] = {idx[s] for s in automaton.final_states}
 
-        csr_mats = {a: m.tocsr() for a, m in mats.items()}
-        return cls(
-            states=states,
-            alphabet=alphabet,
-            start_states=start_states,
-            final_states=final_states,
-            matrices=csr_mats,
-        )
-
-    def accepts(self, word: Iterable[Symbol]) -> bool:
+    def _row_mask(self, ids: Iterable[int]) -> csr_matrix:
         n = len(self.states)
-        if n == 0 or not self.start_states or not self.final_states:
-            return False
+        cols = list(ids)
+        if not cols:
+            return csr_matrix((1, n), dtype=bool)
+        data = np.ones(len(cols), dtype=bool)
+        rows = [0] * len(cols)
+        return csr_matrix((data, (rows, cols)), shape=(1, n), dtype=bool)
 
-        front = dok_matrix((1, n), dtype=bool)
-        for i in self.start_states:
-            front[0, i] = True
-        front = front.tocsr()
+    def _mask_array(self, ids: Iterable[int]) -> np.ndarray:
+        n = len(self.states)
+        m = np.zeros(n, dtype=bool)
+        for i in ids:
+            m[i] = True
+        return m
 
-        for raw_sym in word:
-            a = raw_sym.value if isinstance(raw_sym, Symbol) else raw_sym
+    def accepts(self, word: Iterable[Hashable]) -> bool:
+        cur = self._row_mask(self.start_states)
+        for sym in word:
+            a = _sym_key(sym)
             M = self.matrices.get(a)
             if M is None:
                 return False
-            front = (front @ M).astype(bool)
-            if front.nnz == 0:
+            cur = (cur @ M).astype(bool)
+            if cur.nnz == 0:
                 return False
-
-        cols = np.array(list(self.final_states))
-        return front[:, cols].nnz > 0
+        finals = self._mask_array(self.final_states)
+        return bool(np.any(cur.toarray()[0] & finals))
 
     def is_empty(self) -> bool:
-        n = len(self.states)
-        if n == 0 or not self.start_states or not self.final_states:
+        if not self.start_states or not self.final_states:
             return True
-
-        R = dok_matrix((1, n), dtype=bool)  # достигнутые
-        for i in self.start_states:
-            R[0, i] = True
-        R = R.tocsr()
-        frontier = R.copy()
-
-        if self._has_final(frontier):
-            return False
-
-        while True:
-            next_frontier = csr_matrix((1, n), dtype=bool)
-            for M in self.matrices.values():
-                step = (frontier @ M).astype(bool)
-                next_frontier = ((next_frontier + step) > 0).astype(bool)
-
-            new = ((next_frontier.astype(int) - R.astype(int)) > 0).astype(bool)
-            if new.nnz == 0:
-                break
-            R = ((R + new) > 0).astype(bool)
-            frontier = new
-
-            if self._has_final(frontier):
-                return False
-
-        return True
-
-    def _has_final(self, row_mat: spmatrix) -> bool:
-        if not self.final_states:
-            return False
-        cols = np.array(list(self.final_states))
-        return row_mat[:, cols].nnz > 0
+        if not self.matrices:
+            return len(self.start_states & self.final_states) == 0
+        U = None
+        for M in self.matrices.values():
+            Mi = M.tocsr()
+            U = Mi if U is None else ((U + Mi).astype(bool))
+        reach = self._row_mask(self.start_states)
+        prev = -1
+        while reach.nnz != prev:
+            prev = reach.nnz
+            reach = ((reach + (reach @ U)) > 0).astype(bool)
+        finals = self._mask_array(self.final_states)
+        return not bool(np.any(reach.toarray()[0] & finals))
 
 
 def intersect_automata(
-    a1: AdjacencyMatrixFA, a2: AdjacencyMatrixFA
-) -> AdjacencyMatrixFA:
-    common = a1.alphabet & a2.alphabet
-    n1, n2 = len(a1.states), len(a2.states)
-
-    def idx(i: int, j: int) -> int:
-        return i * n2 + j
-
-    start = {idx(i, j) for i in a1.start_states for j in a2.start_states}
-    final = {idx(i, j) for i in a1.final_states for j in a2.final_states}
-
-    matrices: Dict[Hashable, csr_matrix] = {}
-    for a in common:
-        M = kron(a1.matrices[a], a2.matrices[a], format="csr")
-        matrices[a] = M.astype(bool)
-
-    states = [(i, j) for i in range(n1) for j in range(n2)]
-    return AdjacencyMatrixFA(
-        states=states,
-        alphabet=common,
-        start_states=start,
-        final_states=final,
-        matrices=matrices,
-    )
+    A: "AdjacencyMatrixFA", B: "AdjacencyMatrixFA"
+) -> "AdjacencyMatrixFA":
+    nA, nB = len(A.states), len(B.states)
+    alphabet = set(A.alphabet) | set(B.alphabet)
+    matrices: Dict[Hashable, csc_matrix] = {}
+    for a in alphabet:
+        MA = A.matrices.get(a, csc_matrix((nA, nA), dtype=bool))
+        MB = B.matrices.get(a, csc_matrix((nB, nB), dtype=bool))
+        matrices[a] = kron(MA, MB, format="csc")
+    start_pairs = {iA * nB + iB for iA in A.start_states for iB in B.start_states}
+    final_pairs = {iA * nB + iB for iA in A.final_states for iB in B.final_states}
+    prod = AdjacencyMatrixFA.__new__(AdjacencyMatrixFA)
+    prod.states = [(sa, sb) for sa in A.states for sb in B.states]
+    prod.alphabet = set(alphabet)
+    prod.start_states = start_pairs
+    prod.final_states = final_pairs
+    prod.matrices = matrices
+    return prod
 
 
 def tensor_based_rpq(
     regex: str,
-    graph: nx.MultiDiGraph,
+    graph: MultiDiGraph,
     start_nodes: Set[int],
     final_nodes: Set[int],
 ) -> Set[Tuple[int, int]]:
-    dfa: DeterministicFiniteAutomaton = regex_to_dfa(regex)
-    am_regex = AdjacencyMatrixFA.from_dfa(dfa)
+    g_nfa: NFA = graph_to_nfa(graph, start_nodes, final_nodes)
+    r_dfa: DFA = regex_to_dfa(regex)
+    A = AdjacencyMatrixFA(g_nfa)
+    B = AdjacencyMatrixFA(r_dfa)
+    P = intersect_automata(A, B)
+    U = None
+    for M in P.matrices.values():
+        Mi = M.tocsr()
+        U = Mi if U is None else ((U + Mi).astype(bool))
+    nA, nB = len(A.states), len(B.states)
+    startB = list(B.start_states)
+    if not startB:
+        return set()
+    q0 = startB[0]
+    finalB = set(B.final_states)
+    idxA = {s: i for i, s in enumerate(A.states)}
 
-    nfa_graph = graph_to_nfa(graph, start_states=start_nodes, final_states=final_nodes)
-    am_graph = AdjacencyMatrixFA.from_nfa(nfa_graph)
+    def decode(p: int) -> Tuple[int, int]:
+        return p // nB, p % nB
 
-    am_inter = intersect_automata(am_graph, am_regex)
-
-    n_graph = len(am_graph.states)
-    n_regex = len(am_regex.states)
-    n_inter = len(am_inter.states)
-
-    final_cols = set()
-    for i in range(n_graph):
-        for qf in am_regex.final_states:
-            final_cols.add(i * n_regex + qf)
-    final_cols = np.array(list(final_cols), dtype=int)
-
-    ans: Set[Tuple[int, int]] = set()
-
+    answers: Set[Tuple[int, int]] = set()
     for u in start_nodes:
-        row = dok_matrix((1, n_inter), dtype=bool)
-        for q0 in am_regex.start_states:
-            col = u * n_regex + q0
-            row[0, col] = True
-        row = row.tocsr()
-
-        R = row.copy()
-        frontier = row.copy()
-
-        if frontier[:, final_cols].nnz > 0:
-            ans.add((u, u))
-
-        while True:
-            next_frontier = csr_matrix((1, n_inter), dtype=bool)
-            for M in am_inter.matrices.values():
-                step = (frontier @ M).astype(bool)
-                next_frontier = ((next_frontier + step) > 0).astype(bool)
-
-            new = ((next_frontier.astype(int) - R.astype(int)) > 0).astype(bool)
-            if new.nnz == 0:
-                break
-
-            R = ((R + new) > 0).astype(bool)
-            frontier = new
-
-            hits = new[:, final_cols]
-            if hits.nnz > 0:
-                _, cols = hits.nonzero()
-                used_cols = final_cols[cols]
-                vs = (used_cols // n_regex).tolist()
-                for v in vs:
-                    ans.add(
-                        (
-                            u,
-                            int(am_graph.states[v])
-                            if isinstance(am_graph.states[v], int)
-                            else v,
-                        )
-                    )
-
-    return {(int(u), int(v)) for (u, v) in ans}
+        if u in idxA:
+            iu = idxA[u]
+        elif State(u) in idxA:
+            iu = idxA[State(u)]
+        else:
+            continue
+        start_p = iu * nB + q0
+        reach = csr_matrix(
+            ([True], ([0], [start_p])), shape=(1, U.shape[0]), dtype=bool
+        )
+        prev = -1
+        while reach.nnz != prev:
+            prev = reach.nnz
+            reach = ((reach + (reach @ U)) > 0).astype(bool)
+        dense = reach.toarray()[0].astype(bool)
+        where = np.where(dense)[0]
+        for p in where:
+            iA, iB = decode(p)
+            if iB in finalB:
+                g_state = A.states[iA]
+                v = g_state.value if isinstance(g_state, State) else g_state
+                if v in final_nodes:
+                    answers.add((u, v))
+    return answers
