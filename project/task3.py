@@ -128,7 +128,7 @@ def tensor_based_rpq(
     for M in P.matrices.values():
         Mi = M.tocsr()
         U = Mi if U is None else ((U + Mi).astype(bool))
-    nA, nB = len(A.states), len(B.states)
+    _, nB = len(A.states), len(B.states)
     startB = list(B.start_states)
     if not startB:
         return set()
