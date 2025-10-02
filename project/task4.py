@@ -44,7 +44,6 @@ def ms_bfs_based_rpq(
         return set()
     if not all(isinstance(x, int) for x in startB):
         startB = [idxB[x] for x in startB]
-    q0 = startB[0]
 
     finalB_raw = set(B.final_states)
     if not all(isinstance(x, int) for x in finalB_raw):
@@ -54,40 +53,63 @@ def ms_bfs_based_rpq(
 
     idxA: Dict[Hashable, int] = {s: i for i, s in enumerate(A.states)}
 
+    def normalize_graph_state(node: Hashable) -> Hashable:
+        return node.value if isinstance(node, State) else node
+
+    def get_state_index(node: Hashable) -> int | None:
+        if node in idxA:
+            return idxA[node]
+        if isinstance(node, State):
+            return idxA.get(node)
+        state_node = State(node)
+        return idxA.get(state_node)
+
     def decode(idx: int) -> tuple[int, int]:
         return idx // nB, idx % nB
 
     answers: Set[Tuple[int, int]] = set()
 
-    for u in start_nodes:
-        if u in idxA:
-            iu = idxA[u]
-        elif State(u) in idxA:
-            iu = idxA[State(u)]
-        else:
-            continue
+    normalized_finals = {normalize_graph_state(v) for v in final_nodes}
 
-        start_prod = iu * nB + q0
+    start_rows: List[Hashable] = []
+    data: List[bool] = []
+    rows: List[int] = []
+    cols: List[int] = []
+
+    for u in start_nodes:
+        iu = get_state_index(u)
+        if iu is None:
+            continue
+        row_idx = len(start_rows)
+        start_rows.append(normalize_graph_state(u))
+        for q0 in startB:
+            rows.append(row_idx)
+            cols.append(iu * nB + q0)
+            data.append(True)
+
+        if not rows:
+            return set()
 
         reach = csr_matrix(
-            ([True], ([0], [start_prod])),
-            shape=(1, U.shape[0]),
-            dtype=bool,
+            (data, (rows, cols)), shape=(len(start_rows), U.shape[0]), dtype=bool
         )
+
         prev_nnz = -1
         while reach.nnz != prev_nnz:
             prev_nnz = reach.nnz
             reach = ((reach + (reach @ U)) > 0).astype(bool)
 
-        dense = reach.toarray()[0]
-        where_true = np.where(dense)[0]
+        dense = reach.toarray()
 
-        for p in where_true:
-            iA, iB = decode(p)
-            if iB in finalB:
+        for row_idx, u in enumerate(start_rows):
+            where_true = np.where(dense[row_idx])[0]
+            for p in where_true:
+                iA, iB = decode(p)
+                if iB not in finalB:
+                    continue
                 g_state = A.states[iA]
-                v = g_state.value if isinstance(g_state, State) else g_state
-                if v in final_nodes:
-                    answers.add((u, int(v)))
+                v = normalize_graph_state(g_state)
+                if v in normalized_finals:
+                    answers.add((int(u), int(v)))
 
     return answers
