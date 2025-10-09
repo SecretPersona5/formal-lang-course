@@ -15,10 +15,10 @@ from project.task3 import AdjacencyMatrixFA, intersect_automata
 
 
 def ms_bfs_based_rpq(
-        regex: str,
-        graph: MultiDiGraph,
-        start_nodes: Set[int],
-        final_nodes: Set[int],
+    regex: str,
+    graph: MultiDiGraph,
+    start_nodes: Set[int],
+    final_nodes: Set[int],
 ) -> Set[Tuple[int, int]]:
     g_nfa: NFA = graph_to_nfa(graph, start_nodes, final_nodes)
     r_dfa: DFA = regex_to_dfa(regex)
@@ -90,7 +90,9 @@ def ms_bfs_based_rpq(
         return set()
 
     reach = csr_matrix(
-        (data, (rows, cols)), shape=(len(start_rows), U.shape[0]), dtype=bool,
+        (data, (rows, cols)),
+        shape=(len(start_rows), U.shape[0]),
+        dtype=bool,
     )
 
     prev_nnz = -1
