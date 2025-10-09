@@ -1,7 +1,6 @@
 # Task4
 
 from typing import Dict, Set, Hashable, List, Tuple
-import numpy as np
 from scipy.sparse import csr_matrix
 from networkx import MultiDiGraph
 from pyformlang.finite_automaton import (
@@ -16,10 +15,10 @@ from project.task3 import AdjacencyMatrixFA, intersect_automata
 
 
 def ms_bfs_based_rpq(
-    regex: str,
-    graph: MultiDiGraph,
-    start_nodes: Set[int],
-    final_nodes: Set[int],
+        regex: str,
+        graph: MultiDiGraph,
+        start_nodes: Set[int],
+        final_nodes: Set[int],
 ) -> Set[Tuple[int, int]]:
     g_nfa: NFA = graph_to_nfa(graph, start_nodes, final_nodes)
     r_dfa: DFA = regex_to_dfa(regex)
@@ -71,45 +70,43 @@ def ms_bfs_based_rpq(
 
     normalized_finals = {normalize_graph_state(v) for v in final_nodes}
 
-    start_rows: List[Hashable] = []
-    data: List[bool] = []
+    start_rows: List[int] = []
     rows: List[int] = []
     cols: List[int] = []
+    data: List[bool] = []
 
     for u in start_nodes:
         iu = get_state_index(u)
         if iu is None:
             continue
         row_idx = len(start_rows)
-        start_rows.append(normalize_graph_state(u))
+        start_rows.append(int(normalize_graph_state(u)))
         for q0 in startB:
             rows.append(row_idx)
             cols.append(iu * nB + q0)
             data.append(True)
 
-        if not rows:
-            return set()
+    if not start_rows:
+        return set()
 
-        reach = csr_matrix(
-            (data, (rows, cols)), shape=(len(start_rows), U.shape[0]), dtype=bool
-        )
+    reach = csr_matrix(
+        (data, (rows, cols)), shape=(len(start_rows), U.shape[0]), dtype=bool,
+    )
 
-        prev_nnz = -1
-        while reach.nnz != prev_nnz:
-            prev_nnz = reach.nnz
-            reach = ((reach + (reach @ U)) > 0).astype(bool)
+    prev_nnz = -1
+    while reach.nnz != prev_nnz:
+        prev_nnz = reach.nnz
+        reach = ((reach + (reach @ U)) > 0).astype(bool)
 
-        dense = reach.toarray()
-
-        for row_idx, u in enumerate(start_rows):
-            where_true = np.where(dense[row_idx])[0]
-            for p in where_true:
-                iA, iB = decode(p)
-                if iB not in finalB:
-                    continue
-                g_state = A.states[iA]
-                v = normalize_graph_state(g_state)
-                if v in normalized_finals:
-                    answers.add((int(u), int(v)))
+    for r_idx, src in enumerate(start_rows):
+        cols_true = reach[r_idx].indices
+        for p in cols_true:
+            iA, iB = decode(p)
+            if iB not in finalB:
+                continue
+            g_state = A.states[iA]
+            v = normalize_graph_state(g_state)
+            if v in normalized_finals:
+                answers.add((src, int(v)))
 
     return answers
